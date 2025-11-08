@@ -431,14 +431,29 @@ async function pollDMs() {
 async function sendDM(dm) {
   try {
     const { userId, message } = dm
+    console.log(`📨 Tentative d'envoi de MP à l'utilisateur ${userId}`)
+    
     const user = await client.users.fetch(userId)
     
-    if (user) {
+    if (!user) {
+      console.error(`❌ Utilisateur ${userId} non trouvé`)
+      return
+    }
+    
+    console.log(`✅ Utilisateur trouvé: ${user.tag}`)
+    
+    try {
       await user.send(message)
-      console.log(`✅ MP envoyé à ${user.tag}`)
+      console.log(`✅ MP envoyé avec succès à ${user.tag}`)
+    } catch (dmError) {
+      console.error(`❌ Impossible d'envoyer le MP à ${user.tag}:`, dmError.message)
+      console.error('Raisons possibles:')
+      console.error('- L\'utilisateur a bloqué les MPs de serveur')
+      console.error('- L\'utilisateur a bloqué le bot')
+      console.error('- L\'utilisateur n\'a pas de serveur en commun avec le bot')
     }
   } catch (error) {
-    console.error('Erreur lors de l\'envoi du MP:', error)
+    console.error('❌ Erreur lors de la récupération de l\'utilisateur:', error.message)
   }
 }
 
@@ -465,24 +480,31 @@ async function pollAdminNotifications() {
 async function sendAdminNotification(notif) {
   try {
     const { message } = notif
+    console.log(`📢 Envoi de notification aux ${ADMIN_IDS.length} admins`)
     const guild = client.guilds.cache.get(GUILD_ID)
     
-    if (!guild) return
+    if (!guild) {
+      console.error('❌ Serveur Discord non trouvé')
+      return
+    }
 
     // Envoyer un MP à chaque admin
     for (const adminId of ADMIN_IDS) {
       try {
+        console.log(`📨 Envoi à l'admin ${adminId}`)
         const user = await client.users.fetch(adminId)
         if (user) {
           await user.send(message)
           console.log(`✅ Notification envoyée à l'admin ${user.tag}`)
+        } else {
+          console.error(`❌ Admin ${adminId} non trouvé`)
         }
       } catch (error) {
-        console.error(`Erreur lors de l'envoi à l'admin ${adminId}:`, error.message)
+        console.error(`❌ Erreur lors de l'envoi à l'admin ${adminId}:`, error.message)
       }
     }
   } catch (error) {
-    console.error('Erreur lors de l\'envoi de la notification admin:', error)
+    console.error('❌ Erreur lors de l\'envoi de la notification admin:', error.message)
   }
 }
 
