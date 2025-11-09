@@ -84,21 +84,34 @@ async function pollTickets() {
   }
 }
 
+// Fonction pour déterminer le préfixe du salon selon le type de service
+function getChannelPrefix(serviceId) {
+  if (!serviceId) return 'ticket';
+  const service = serviceId.toLowerCase();
+  if (service.includes('base') || service.includes('devis')) return 'devis';
+  if (service.includes('mapping') || service.includes('map')) return 'mapping';
+  if (service.includes('script')) return 'script';
+  return 'ticket';
+}
+
 async function createTicket(ticket) {
   try {
     const guild = client.guilds.cache.get(GUILD_ID)
     if (!guild) return
 
-    const { orderId, userId, username } = ticket
+    const { orderId, userId, username, serviceId } = ticket
 
     // Check if ticket already exists
     if (activeTickets.has(orderId)) {
       return
     }
 
+    // Déterminer le préfixe du salon
+    const prefix = getChannelPrefix(serviceId)
+
     // Create ticket channel
     const channel = await guild.channels.create({
-      name: `ticket-${username}-${orderId.slice(0, 8)}`,
+      name: `${prefix}-${orderId.slice(0, 8)}`,
       type: ChannelType.GuildText,
       parent: ticketCategory?.id,
       permissionOverwrites: [
@@ -130,17 +143,30 @@ async function createTicket(ticket) {
 
     const embed = new EmbedBuilder()
       .setColor('#ff0040')
-      .setTitle('🎫 Nouveau Ticket')
-      .setDescription(`Commande: \`${orderId}\`\nClient: <@${userId}>`)
+      .setTitle('🎫 Nouveau ticket')
+      .setDescription(`Le devis de **${username}** est prêt !`)
       .addFields(
-        { name: '📋 Statut', value: 'En attente', inline: true },
-        { name: '📊 Progression', value: '0%', inline: true }
+        { name: '📦 Service', value: serviceId || 'Service', inline: true },
+        { name: '🔢 ID', value: `#${orderId.slice(0, 8)}`, inline: true },
+        { name: '🔗 Voir le devis', value: `[Cliquez ici](${WEBSITE_URL}/quote/${orderId})` }
       )
       .setTimestamp()
       .setFooter({ text: 'EZBshop' })
 
-    await channel.send({ embeds: [embed] })
-    await channel.send(`<@${userId}> Bienvenue ! Notre équipe va prendre en charge votre commande. ${ADMIN_IDS.map(id => `<@${id}>`).join(' ')}`)
+    const closeButton = new ButtonBuilder()
+      .setCustomId(`close_ticket_${orderId}`)
+      .setLabel('Fermer le ticket')
+      .setStyle(ButtonStyle.Danger)
+      .setEmoji('🔒')
+
+    const row = new ActionRowBuilder()
+      .addComponents(closeButton)
+
+    await channel.send({ 
+      content: `<@${userId}> Bienvenue ! Notre équipe va prendre en charge votre commande. ${ADMIN_IDS.map(id => `<@${id}>`).join(' ')}`,
+      embeds: [embed],
+      components: [row]
+    })
 
     console.log(`✅ Ticket créé: ${channel.name}`)
   } catch (error) {
@@ -212,7 +238,62 @@ client.on('messageCreate', async (message) => {
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isButton()) return
 
-  const [action, orderId] = interaction.customId.split('_')
+  const customId = interaction.customId
+
+  // Gestion du bouton Close
+  if (customId.startsWith('close_ticket_')) {
+    // Vérifier que c'est un admin
+    if (!ADMIN_IDS.includes(interaction.user.id)) {
+      return interaction.reply({ content: '❌ Seuls les admins peuvent fermer les tickets.', ephemeral: true })
+    }
+    
+    // Demander confirmation
+    const confirmButton = new ButtonBuilder()
+      .setCustomId('confirm_close')
+      .setLabel('Confirmer')
+      .setStyle(ButtonStyle.Danger)
+    
+    const cancelButton = new ButtonBuilder()
+      .setCustomId('cancel_close')
+      .setLabel('Annuler')
+      .setStyle(ButtonStyle.Secondary)
+    
+    const confirmRow = new ActionRowBuilder()
+      .addComponents(confirmButton, cancelButton)
+    
+    await interaction.reply({
+      content: '⚠️ Êtes-vous sûr de vouloir fermer ce ticket ? Il sera supprimé dans 5 secondes.',
+      components: [confirmRow],
+      ephemeral: true
+    })
+    return
+  }
+
+  if (customId === 'confirm_close') {
+    await interaction.update({ 
+      content: '✅ Fermeture du ticket...', 
+      components: [] 
+    })
+    
+    setTimeout(async () => {
+      try {
+        await interaction.channel.delete('Ticket fermé par un admin')
+      } catch (error) {
+        console.error('Error deleting channel:', error)
+      }
+    }, 5000)
+    return
+  }
+  
+  if (customId === 'cancel_close') {
+    await interaction.update({ 
+      content: '❌ Fermeture annulée.', 
+      components: [] 
+    })
+    return
+  }
+
+  const [action, orderId] = customId.split('_')
 
   if (action === 'createquote') {
     // Admin wants to create a quote
@@ -283,9 +364,12 @@ async function createQuoteTicket(ticket) {
       return
     }
 
+    // Déterminer le préfixe du salon
+    const prefix = getChannelPrefix(serviceType)
+
     // Create ticket channel
     const channel = await guild.channels.create({
-      name: `devis-${username}-${orderId.slice(0, 8)}`,
+      name: `${prefix}-${orderId.slice(0, 8)}`,
       type: ChannelType.GuildText,
       parent: ticketCategory?.id,
       permissionOverwrites: [
@@ -316,27 +400,37 @@ async function createQuoteTicket(ticket) {
     activeTickets.set(orderId, channel.id)
 
     const embed = new EmbedBuilder()
-      .setColor('#cc0033')
+      .setColor('#ff0040')
       .setTitle('💼 Demande de Devis')
-      .setDescription(`**Service:** ${serviceType}\n**Description:** ${description}\n\n**Client:** <@${discordId}>`)
+      .setDescription(`**${username}** demande un devis`)
       .addFields(
-        { name: '📋 Statut', value: 'En attente de devis', inline: true },
-        { name: '🆔 Commande', value: `\`${orderId}\``, inline: true }
+        { name: '📦 Service', value: serviceType, inline: true },
+        { name: '🔢 ID', value: `#${orderId.slice(0, 8)}`, inline: true },
+        { name: '📝 Description', value: description.slice(0, 500) }
       )
       .setTimestamp()
-      .setFooter({ text: 'EZBshop - Système de devis' })
+      .setFooter({ text: 'EZBshop' })
+
+    const closeButton = new ButtonBuilder()
+      .setCustomId(`close_ticket_${orderId}`)
+      .setLabel('Fermer le ticket')
+      .setStyle(ButtonStyle.Danger)
+      .setEmoji('🔒')
+
+    const createQuoteButton = new ButtonBuilder()
+      .setCustomId(`createquote_${orderId}`)
+      .setLabel('Créer un devis')
+      .setStyle(ButtonStyle.Primary)
+      .setEmoji('💰')
 
     const row = new ActionRowBuilder()
-      .addComponents(
-        new ButtonBuilder()
-          .setCustomId(`createquote_${orderId}`)
-          .setLabel('Créer un devis')
-          .setStyle(ButtonStyle.Primary)
-          .setEmoji('💰')
-      )
+      .addComponents(createQuoteButton, closeButton)
 
-    await channel.send({ embeds: [embed], components: [row] })
-    await channel.send(`<@${discordId}> Bienvenue ! Notre équipe va étudier votre demande et vous proposer un devis personnalisé. ${ADMIN_IDS.map(id => `<@${id}>`).join(' ')}`)
+    await channel.send({ 
+      content: `<@${discordId}> Bienvenue ! Notre équipe va étudier votre demande et vous proposer un devis personnalisé. ${ADMIN_IDS.map(id => `<@${id}>`).join(' ')}`,
+      embeds: [embed], 
+      components: [row] 
+    })
 
     console.log(`✅ Ticket de devis créé: ${channel.name}`)
 
